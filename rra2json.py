@@ -187,6 +187,55 @@ def autoassign_rras(config):
     except IndexError:
         debug("No unassigned RRAs")
 
+def autoassign_vas(config):
+    """This will search through unassigned RRA bugs and assign them automatically"""
+    bcfg = config['bugzilla']
+
+    # If no API key has been specified, just skip this
+    if len(bcfg['api_key']) == 0:
+        return
+
+    b = bugzilla.Bugzilla(url=bcfg['url'], api_key=bcfg['api_key'])
+
+    try:
+        with open(bcfg['cache'], 'rb') as f:
+            assign_list = pickle.load(f)
+    except FileNotFoundError:
+        debug("no current autoassign list found, using configured defaults")
+        assign_list = list(bcfg['autoassign'])
+
+    # Do we have any VA in the queue?
+    terms = [{'product': bcfg['product']}, {'component': bcfg['component']},
+            {'status': 'NEW'}, {'status': 'UNCONFIRMED'}
+            ]
+
+    bugs = b.search_bugs(terms)['bugs']
+    try:
+        bugzilla.DotDict(bugs[-1])
+        debug("Found {} unassigned VA(s). Assigning work!".format(len(bugs)))
+        for bug in bugs:
+            # Is this a valid rra request bug?
+            if bug['whiteboard'].startswith('autoentry'):
+                debug("{} is not an VA, skipping".format(bug['id']))
+                continue
+            # Next assignee in the list, rotate
+            assignee = assign_list.pop()
+            assign_list.insert(0, assignee)
+            bug_up = bugzilla.DotDict()
+            bug_up.assigned_to = assignee
+            bug_up.status = 'ASSIGNED'
+            try:
+                debug("Updating bug {} assigning {}".format(bug['id'], assignee))
+                b.put_bug(bug['id'], bug_up)
+            except Exception as e:
+                debug("Failed to update bug {}: {}".format(bug['id'], e))
+
+        with open(bcfg['cache'], 'wb') as f:
+            pickle.dump(assign_list, f)
+
+    except IndexError:
+        debug("No unassigned RRAs")
+
 def fill_bug(config, nags, rrajsondoc):
     bcfg = config['bugzilla']
 
